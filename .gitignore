@@ -1,0 +1,7 @@
+venv
+creds*
+.env
+*.mp3
+*.wav
+__pycache__
+*test*
