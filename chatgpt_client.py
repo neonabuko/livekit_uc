@@ -25,9 +25,9 @@ async def stream_chat(message: str):
                         if buffer.startswith('data: '):
                             data = buffer[6:].strip()
                             try:
-                                json_data = json.loads(data)
-                                if 'response' in json_data:
-                                    yield json_data['response']
+                                # json_data = json.loads(data)
+                                # if 'data' in json_data:
+                                yield data
                             except json.JSONDecodeError:
                                 print(f"Failed to parse JSON: {data}")
                         buffer = ""

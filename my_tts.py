@@ -7,7 +7,7 @@ import aiofiles
 from gtts import gTTS
 from livekit.agents.tts import TTS, ChunkedStream, TTSCapabilities, SynthesizedAudio
 from livekit.agents import utils
-from icecream import ic
+
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -25,19 +25,22 @@ class GTTSChunkedStream(ChunkedStream):
                     yield frame.data.tobytes()        
 
     async def _main_task(self) -> None:
-        # os.system('pkill flite')
+        os.system('pkill flite')
         tts_filename = "tts.mp3"
 
-        with open(tts_filename, "wb") as f:
+        with open(tts_filename, "wb"):
             pass
 
-        tts = gTTS(text=self._input_text, lang="en")
-        tts.save(tts_filename)
+        processed_text = self._input_text.replace('*', '').replace('\n', ' ')
+        self._input_text = processed_text
+        
+        process = subprocess.Popen(
+            ["flite", "-t", self._input_text], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        await asyncio.to_thread(process.communicate)
 
-        # process = subprocess.Popen(
-        #     ["flite", "-t", self._input_text], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        # )
-        # await asyncio.to_thread(process.communicate)
+        # tts = gTTS(text=self._input_text, lang="en")
+        # tts.save(tts_filename)
 
         audio_bstream = utils.audio.AudioByteStream(sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS)
         async for chunk in self._stream_audio_chunks(tts_filename):

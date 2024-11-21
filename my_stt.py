@@ -4,7 +4,13 @@ import subprocess
 import time
 from typing import Optional
 import wave
-from livekit.agents.stt import STT, SpeechEvent, SpeechEventType, STTCapabilities, SpeechData
+from livekit.agents.stt import (
+    STT,
+    SpeechEvent,
+    SpeechEventType,
+    STTCapabilities,
+    SpeechData,
+)
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.agents.metrics import STTMetrics
 from uuid import uuid4
@@ -20,7 +26,7 @@ class LocalSTT(STT):
     async def _recognize_impl(
         self, buffer: AudioBuffer, *, language: Optional[str] = None
     ) -> SpeechEvent:
-        
+
         buffer = merge_frames(buffer)
         io_buffer = io.BytesIO()
         with wave.open(io_buffer, "wb") as wav:
@@ -53,13 +59,13 @@ class LocalSTT(STT):
             raise Exception(f"STT failed: {stderr}")
 
         transcribed_text = stdout.strip() or ""
-        speech_data = SpeechData(language="en", text=transcribed_text)
         ic(transcribed_text)
+        speech_data = SpeechData(language="en", text=transcribed_text)
 
         event = SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
             request_id=str(uuid4()),
-            alternatives=[speech_data]
+            alternatives=[speech_data],
         )
 
         stt_metrics = STTMetrics(
