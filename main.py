@@ -31,13 +31,14 @@ async def entry_point(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(role="system", text=("You are a helpful assistant."))
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    gemini = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest")
-    custom_assistant = Assistant(gemini)
+    gemini_assistant = Assistant(
+        ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest")
+    )
 
     assistant = VoiceAssistant(
         vad=ctx.proc.userdata["vad"],
         stt=LocalSTT(),
-        llm=LocalLLM(assistant=custom_assistant),
+        llm=LocalLLM(assistant=gemini_assistant),
         tts=LocalTTS(),
         chat_ctx=initial_ctx,
     )

@@ -7,6 +7,10 @@ import aiofiles
 from gtts import gTTS
 from livekit.agents.tts import TTS, ChunkedStream, TTSCapabilities, SynthesizedAudio
 from livekit.agents import utils
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+import aiohttp
 
 
 SAMPLE_RATE = 24000
@@ -17,47 +21,58 @@ class GTTSChunkedStream(ChunkedStream):
         super().__init__(tts, text)
 
     async def _stream_audio_chunks(self, file_path: str) -> AsyncGenerator[bytes, None]:
-        """Async generator that yields audio frames from an MP3 file."""
         decoder = utils.codecs.Mp3StreamDecoder()
         async with aiofiles.open(file_path, "rb") as stream:
             while data := await stream.read(1024):  
                 for frame in decoder.decode_chunk(data):
                     yield frame.data.tobytes()        
 
+    async def convert_sentence(self, sentence: str, tts_id: int) -> str:
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as pool:
+            tts = await loop.run_in_executor(pool, partial(gTTS, text=sentence, lang="en"))
+            await loop.run_in_executor(pool, tts.save, f"stt/tts_{tts_id}.mp3")
+
+        return f"stt/tts_{tts_id}.mp3"
+
+
+    async def convert_text_to_speech(self, text: str) -> AsyncGenerator[str, None]:
+        async with aiohttp.ClientSession():
+            tasks = []
+            for i, sentence in enumerate(text.split(". ")):
+                if sentence.strip():
+                    task = asyncio.create_task(self.convert_sentence(sentence, i))
+                    tasks.append(task)
+
+            for task in tasks:
+                try:
+                    result = await task
+                    yield result
+                except Exception as e:
+                    print(f"Error converting sentence: {e}")
+                    continue
+
     async def _main_task(self) -> None:
-        os.system('pkill flite')
-        tts_filename = "tts.mp3"
-
-        with open(tts_filename, "wb"):
-            pass
-
         processed_text = self._input_text.replace('*', '').replace('\n', ' ')
         self._input_text = processed_text
         
-        process = subprocess.Popen(
-            ["flite", "-t", self._input_text], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        await asyncio.to_thread(process.communicate)
-
-        # tts = gTTS(text=self._input_text, lang="en")
-        # tts.save(tts_filename)
-
         audio_bstream = utils.audio.AudioByteStream(sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS)
-        async for chunk in self._stream_audio_chunks(tts_filename):
-            for frame in audio_bstream.write(chunk):
-                await self._event_ch.send(
+        async for chunk_path in self.convert_text_to_speech(self._input_text):
+            async for chunk_path in self._stream_audio_chunks(chunk_path):
+                for frame in audio_bstream.write(chunk_path):
+                    await self._event_ch.send(
+                        SynthesizedAudio(
+                            frame=frame,
+                            request_id=str(uuid4()),
+                        )
+                    )
+            for frame in audio_bstream.flush():
+                self._event_ch.send_nowait(
                     SynthesizedAudio(
                         frame=frame,
                         request_id=str(uuid4()),
                     )
                 )
-        for frame in audio_bstream.flush():
-            self._event_ch.send_nowait(
-                SynthesizedAudio(
-                    frame=frame,
-                    request_id=str(uuid4()),
-                )
-            )
 
 
 class LocalTTS(TTS):
