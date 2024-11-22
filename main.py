@@ -6,7 +6,6 @@ from livekit.agents import (
     JobProcess,
     WorkerOptions,
     cli,
-    llm,
 )
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import silero
@@ -28,24 +27,20 @@ def prewarm(proc: JobProcess):
 
 
 async def entry_point(ctx: JobContext):
-    initial_ctx = llm.ChatContext().append(role="system", text=("You are a helpful assistant."))
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    gemini_assistant = Assistant(
-        ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest")
-    )
+    gemini = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest")
+    ass = Assistant(model=gemini)
 
     assistant = VoiceAssistant(
         vad=ctx.proc.userdata["vad"],
         stt=LocalSTT(),
-        llm=LocalLLM(assistant=gemini_assistant),
+        llm=LocalLLM(assistant=ass),
         tts=LocalTTS(),
-        chat_ctx=initial_ctx,
     )
 
     assistant.start(ctx.room)
     await asyncio.sleep(1)
-    await assistant.say("Welcome back, Matt!")
 
 
 if __name__ == "__main__":
