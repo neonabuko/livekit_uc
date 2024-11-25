@@ -7,3 +7,4 @@ __pycache__
 *test*
 alloy_voice_assistant/
 stt/*
+.chat_history
