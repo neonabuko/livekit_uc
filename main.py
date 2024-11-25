@@ -14,8 +14,12 @@ from my_stt import LocalSTT
 from my_tts import LocalTTS
 from my_llm import LocalLLM, Assistant
 from icecream import ic
+# from addons import WebcamStream
+
 
 load_dotenv()
+
+webcam_stream = None
 
 def prewarm(proc: JobProcess):
     try:
@@ -41,6 +45,9 @@ async def entry_point(ctx: JobContext):
 
     assistant.start(ctx.room)
     await asyncio.sleep(1)
+
+    if webcam_stream is not None:
+        ctx.room.on("participant_disconnected", webcam_stream.stop())
 
 
 if __name__ == "__main__":

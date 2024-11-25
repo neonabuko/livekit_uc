@@ -1,7 +1,6 @@
-from typing import Any, AsyncIterator
+from typing import Any
 from uuid import uuid4
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import AddableDict
 from livekit.agents.llm import LLM, FunctionInfo
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.function_context import FunctionContext
@@ -18,11 +17,11 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 from langchain_community.chat_message_histories import ChatMessageHistory
-from langchain_core.messages import BaseMessageChunk, HumanMessage, BaseMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.messages.ai import AIMessage
-from langchain.agents import AgentExecutor, Tool, create_tool_calling_agent
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 
-from test import get_current_time
+from addons import WebcamStream, get_current_time
 
 
 class Assistant:
@@ -30,77 +29,68 @@ class Assistant:
         self.message_history = ChatMessageHistory()
         self.model = model
         self.initial_prompt = (
-            "You are a chill, relaxed assistant that uses slangs and emojis. "
-            "When asked about time, use the get_current_time function."
+            "You are a chill, relaxed assistant that uses slangs. You're honest even if it means you have to tell hard truths."
+            "You have functions you can call if you can't provide the information user requested by yourself."
+            "User can ask you to see him, which means to look at the image you received."
         )
-        self.tool = Tool(
-            name="get_current_time",
-            description="Get the current time.",
-            func=get_current_time,
-        )
-        prompt_template = ChatPromptTemplate.from_messages(
-            [
-                ("system", self.initial_prompt),
-                ("human", "{input}"),
-                ("placeholder", "{agent_scratchpad}"),
-            ]
-        )        
+        self.tools = [get_current_time]
+        
+        messages = [
+            ("system", self.initial_prompt),
+            ("placeholder", "{agent_scratchpad}")
+        ]
+        prompt_template = ChatPromptTemplate.from_messages(messages)
         agent = create_tool_calling_agent(
-            tools=[self.tool],
+            tools=self.tools,
             llm=self.model,
             prompt=prompt_template,
         )
-        self.agent_executor = AgentExecutor(agent=agent, tools=[self.tool], verbose=True)        
+        self.agent_executor = AgentExecutor(agent=agent, tools=self.tools)
 
+    def _update_agent(self):
+        messages = [
+            ("system", self.initial_prompt),
+            *[msg for msg in self.message_history.messages],
+            ("placeholder", "{agent_scratchpad}")
+        ]
+        prompt_template = ChatPromptTemplate.from_messages(messages)
+        agent = create_tool_calling_agent(
+            tools=self.tools,
+            llm=self.model,
+            prompt=prompt_template,
+        )
+        self.agent_executor = AgentExecutor(agent=agent, tools=self.tools)
 
-    def answer_to_image(self, prompt, image):
+    async def answer(self, prompt: str, image):
         if not prompt:
             return
 
-        try:
-            base64_str = f"data:image/jpeg;base64,{image.decode()}"
-            message = HumanMessage(
-                content=[
-                    {"type": "image_url", "image_url": {"url": base64_str}},
-                    prompt,
-                ]
-            )
-            self.message_history.add_message(message)
-            response: BaseMessage = self.model.invoke(
-                input=[
-                    SystemMessage(content=self.initial_prompt),                    
-                    *self.message_history.messages
-                ]
-            )
-            self.message_history.add_message(response)
-
-            return response
-        except Exception as e:
-            ic("Error:", str(e))
-
-    async def answer_to_text(self, prompt: str):
-        if not prompt:
-            return
-
-        message = HumanMessage(content=prompt)
+        content_type = {
+            "type": "image_url", 
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image.decode()}"
+                }
+            } if image is not None else ""
+        message = HumanMessage(
+            content=[
+                prompt,
+                content_type,
+            ]
+        )
         self.message_history.add_message(message)
+        self._update_agent()
 
         full_response = ""
         async for chunk in self.agent_executor.astream(
-            {"input": prompt, "agent_scratchpad": ""}
+            {"agent_scratchpad": ""}
         ):
             if "output" in chunk:
                 content = chunk["output"]
                 full_response += content
                 yield AIMessage(content=content)
 
-        final_message = AIMessage(content=full_response)
-        self.message_history.add_message(final_message)
-
-
-    async def initialize(self, initial_prompt: str) -> None:
-        system_message = AIMessage(content=initial_prompt)
-        self.message_history.add_message(system_message)
+        ai_response = AIMessage(content=full_response)
+        self.message_history.add_message(ai_response)
 
 
 class MyLLMStream(LLMStream):
@@ -109,10 +99,12 @@ class MyLLMStream(LLMStream):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
+        webcam_stream: WebcamStream | None = None,
         fnc_ctx: FunctionContext | None = None,
-        assistant: Assistant,
+        assistant: Assistant
     ) -> None:
         self.assistant = assistant
+        self.webcam_stream = webcam_stream
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx)
 
     async def _send_response(self, data: str) -> None:
@@ -125,44 +117,18 @@ class MyLLMStream(LLMStream):
         assert isinstance(last_user_prompt, str)
 
         ic("Requesting LLM response...")
-        async for chunk in self.assistant.answer_to_text(last_user_prompt):
+        frame = None
+        if self.webcam_stream:
+            frame = await self.webcam_stream.read(encode=True)
+        async for chunk in self.assistant.answer(prompt=last_user_prompt, image=frame):
             if isinstance(chunk, AIMessage):
                 if chunk.content:
                     assert isinstance(chunk.content, str)
                     await self._send_response(chunk.content)
-                if chunk.additional_kwargs.get('tool_calls'):
-                    tool_calls = chunk.additional_kwargs['tool_calls']
-                    for tool_call in tool_calls:
-                        if tool_call['type'] == 'function' and self.fnc_ctx:
-                            function_call = tool_call['function']
-                            name = function_call['name']
-                            result = await self.fnc_ctx.ai_callable(name=name)()
-                            await self._send_response(str(result))
 
 
     def _parse_choice(self, choice: Choice) -> ChatChunk:
             delta = choice.delta
-            tool_calls = []
-            if delta.tool_calls:
-                logger.info(f"Processing tool calls: {len(delta.tool_calls)} calls found")
-                for tool_call in delta.tool_calls:
-                    tool_call_function = getattr(tool_call, 'function', None)
-                    if tool_call_function is None:
-                        logger.warning("Tool call function attribute is None, skipping")
-                        continue
-                    
-                    name = getattr(tool_call_function, 'name', '')
-                    arguments = getattr(tool_call_function, 'arguments', '')
-                    logger.info(f"Processing function call: {name} with arguments: {arguments}")
-                    
-                    tool_calls.append({
-                        'id': getattr(tool_call, 'id', str(uuid4())),
-                        'type': 'function',
-                        'function': {
-                            'name': name,
-                            'arguments': arguments
-                        }
-                    })
             
             return ChatChunk(
                 request_id=str(uuid4()),
@@ -171,7 +137,6 @@ class MyLLMStream(LLMStream):
                         delta=ChoiceDelta(
                             content=delta.content,
                             role="assistant",
-                            tool_calls=tool_calls
                         ),
                         index=choice.index,
                     )
@@ -180,21 +145,10 @@ class MyLLMStream(LLMStream):
 
 
 class LocalLLM(LLM):
-    def __init__(self, assistant: Any = None) -> None:
+    def __init__(self, webcam_stream: WebcamStream | None = None, assistant: Any = None) -> None:
         self.assistant = assistant
+        self.webcam_stream = webcam_stream
         super().__init__()
-
-    def _build_function_description(self, fnc_info: FunctionInfo) -> dict:
-        """Convert function definition to a format compatible with the LLM."""
-        return {
-            "name": fnc_info.name,
-            "description": fnc_info.description,
-            "callable": fnc_info.callable,
-            "parameters": {
-                "type": "object",
-                "properties": {}
-            }
-        }
 
     def chat(
         self,
@@ -205,22 +159,11 @@ class LocalLLM(LLM):
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
     ) -> MyLLMStream:
-        generation_config = {}
-        if temperature is not None:
-            generation_config["temperature"] = temperature
-        
-        if fnc_ctx and len(fnc_ctx.ai_functions) > 0:
-            fnc_desc = []
-            for func in fnc_ctx.ai_functions.values():
-                fnc_desc.append(self._build_function_description(func))
-            
-            generation_config["tools"] = fnc_desc
-            if parallel_tool_calls is not None:
-                generation_config["parallel_tool_calls"] = parallel_tool_calls
 
         return MyLLMStream(
             self,
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
             assistant=self.assistant,
+            webcam_stream=self.webcam_stream
         )

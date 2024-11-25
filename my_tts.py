@@ -1,6 +1,4 @@
 import asyncio
-import os
-import subprocess
 from typing import AsyncGenerator
 from uuid import uuid4
 import aiofiles
@@ -11,6 +9,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import aiohttp
+import re
 
 
 SAMPLE_RATE = 24000
@@ -29,8 +28,9 @@ class GTTSChunkedStream(ChunkedStream):
 
     async def convert_sentence(self, sentence: str, tts_id: int) -> str:
         loop = asyncio.get_event_loop()
+        clean_sentence = self.remove_emojis(sentence)
         with ThreadPoolExecutor() as pool:
-            tts = await loop.run_in_executor(pool, partial(gTTS, text=sentence, lang="en"))
+            tts = await loop.run_in_executor(pool, partial(gTTS, text=clean_sentence, lang="en"))
             await loop.run_in_executor(pool, tts.save, f"stt/tts_{tts_id}.mp3")
 
         return f"stt/tts_{tts_id}.mp3"
@@ -51,6 +51,17 @@ class GTTSChunkedStream(ChunkedStream):
                 except Exception as e:
                     print(f"Error converting sentence: {e}")
                     continue
+    
+    def remove_emojis(self, text: str) -> str:
+        emoji_pattern = re.compile("["
+                            u"\U0001F600-\U0001F64F"  # emoticons
+                            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+                            u"\U0001F680-\U0001F6FF"  # transport & map symbols
+                            u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+                            u"\U00002702-\U000027B0"
+                            u"\U000024C2-\U0001F251"
+                            "]+", flags=re.UNICODE)
+        return emoji_pattern.sub('', text)
 
     async def _main_task(self) -> None:
         processed_text = self._input_text.replace('*', '').replace('\n', ' ')

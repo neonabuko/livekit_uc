@@ -5,3 +5,5 @@ creds*
 *.wav
 __pycache__
 *test*
+alloy_voice_assistant/
+stt/*
