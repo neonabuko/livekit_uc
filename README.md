@@ -38,7 +38,8 @@ pip install -r requirements.txt
 3. Set up environment variables:
 Create a `.env` file with:
 ```
-CHATGPT_API_KEY=your_api_key_here
+CHATGPT_API_KEY=your_api_key_here # If using OpenAI
+GOOGLE_API_KEY=your_google_api_key_here # If using Gemini
 LIVEKIT_API_KEY=your_livekit_api_key
 LIVEKIT_API_SECRET=your_livekit_secret
 ```
